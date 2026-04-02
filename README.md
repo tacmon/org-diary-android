@@ -18,7 +18,7 @@
 
 ## 构建说明
 ```bash
-cd 移动端实现/tri_2_apk
+cd 移动端实现/try_2_apk
 ./gradlew assembleDebug
 ```
 
