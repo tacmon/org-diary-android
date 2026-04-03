@@ -17,6 +17,7 @@ import kotlinx.coroutines.launch
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import java.util.Calendar
 
 class MainActivity : ComponentActivity() {
     private lateinit var gitRepo: GitRepository
@@ -144,18 +145,54 @@ class MainActivity : ComponentActivity() {
                 )
                 
                 if (entryType == "TODO") {
-                    OutlinedTextField(
-                        value = scheduledDate,
-                        onValueChange = onScheduledChange,
-                        label = { Text("计划时间 (yyyy-MM-dd)") },
+                    var showScheduledPicker by remember { mutableStateOf(false) }
+                    var showDeadlinePicker by remember { mutableStateOf(false) }
+                    
+                    OutlinedButton(
+                        onClick = { showScheduledPicker = true },
                         modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = deadlineDate,
-                        onValueChange = onDeadlineChange,
-                        label = { Text("截止时间 (yyyy-MM-dd)") },
+                    ) {
+                        Text(if (scheduledDate.isBlank()) "📅 选择计划时间（可选）" else "📅 计划: $scheduledDate")
+                    }
+                    
+                    if (scheduledDate.isNotBlank()) {
+                        TextButton(onClick = { onScheduledChange("") }) {
+                            Text("清除计划时间")
+                        }
+                    }
+                    
+                    OutlinedButton(
+                        onClick = { showDeadlinePicker = true },
                         modifier = Modifier.fillMaxWidth()
-                    )
+                    ) {
+                        Text(if (deadlineDate.isBlank()) "⏰ 选择截止时间（可选）" else "⏰ 截止: $deadlineDate")
+                    }
+                    
+                    if (deadlineDate.isNotBlank()) {
+                        TextButton(onClick = { onDeadlineChange("") }) {
+                            Text("清除截止时间")
+                        }
+                    }
+                    
+                    if (showScheduledPicker) {
+                        DatePickerDialog(
+                            onDateSelected = { date ->
+                                onScheduledChange(date)
+                                showScheduledPicker = false
+                            },
+                            onDismiss = { showScheduledPicker = false }
+                        )
+                    }
+                    
+                    if (showDeadlinePicker) {
+                        DatePickerDialog(
+                            onDateSelected = { date ->
+                                onDeadlineChange(date)
+                                showDeadlinePicker = false
+                            },
+                            onDismiss = { showDeadlinePicker = false }
+                        )
+                    }
                 }
                 
                 Button(
@@ -258,6 +295,41 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+    
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun DatePickerDialog(
+        onDateSelected: (String) -> Unit,
+        onDismiss: () -> Unit
+    ) {
+        val datePickerState = rememberDatePickerState(
+            initialSelectedDateMillis = System.currentTimeMillis()
+        )
+        
+        DatePickerDialog(
+            onDismissRequest = onDismiss,
+            confirmButton = {
+                TextButton(onClick = {
+                    datePickerState.selectedDateMillis?.let { millis ->
+                        val calendar = Calendar.getInstance().apply {
+                            timeInMillis = millis
+                        }
+                        val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
+                        onDateSelected(dateFormat.format(calendar.time))
+                    }
+                }) {
+                    Text("确定")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        ) {
+            DatePicker(state = datePickerState)
         }
     }
 }
