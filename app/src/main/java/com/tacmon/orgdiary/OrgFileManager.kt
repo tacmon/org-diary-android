@@ -104,8 +104,8 @@ class OrgFileManager(private val orgFile: File) {
         lines.add(insertIndex + 1, "***** TODO ${content.trim()}")
 
         val planningParts = mutableListOf<String>()
-        scheduledTime?.let { planningParts.add("<${orgDateFormat.format(it)}>") }
-        deadlineTime?.let { planningParts.add("<${orgDateFormat.format(it)}>") }
+        scheduledTime?.let { planningParts.add("SCHEDULED: <${orgDateFormat.format(it)}>") }
+        deadlineTime?.let { planningParts.add("DEADLINE: <${orgDateFormat.format(it)}>") }
 
         if (planningParts.isNotEmpty()) {
             lines.add(insertIndex + 2, planningParts.joinToString(" "))
