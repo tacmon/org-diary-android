@@ -100,18 +100,17 @@ class OrgFileManager(private val orgFile: File) {
             insertIndex = lines.size
         }
         
-        lines.add(insertIndex, "**** TODO <$timeStr>")
-        
-        val scheduleParts = mutableListOf<String>()
-        scheduledTime?.let { scheduleParts.add("SCHEDULED: <${orgDateFormat.format(it)}>") }
-        deadlineTime?.let { scheduleParts.add("DEADLINE: <${orgDateFormat.format(it)}>") }
-        
-        if (scheduleParts.isNotEmpty()) {
-            lines.add(insertIndex + 1, scheduleParts.joinToString(" "))
-            lines.add(insertIndex + 2, content)
+        lines.add(insertIndex, "**** <$timeStr>")
+        lines.add(insertIndex + 1, "***** TODO ${content.trim()}")
+
+        val planningParts = mutableListOf<String>()
+        scheduledTime?.let { planningParts.add("<${orgDateFormat.format(it)}>") }
+        deadlineTime?.let { planningParts.add("<${orgDateFormat.format(it)}>") }
+
+        if (planningParts.isNotEmpty()) {
+            lines.add(insertIndex + 2, planningParts.joinToString(" "))
             lines.add(insertIndex + 3, "")
         } else {
-            lines.add(insertIndex + 1, content)
             lines.add(insertIndex + 2, "")
         }
         
@@ -148,6 +147,7 @@ class OrgFileManager(private val orgFile: File) {
         var currentDate = ""
         var i = 0
         val headingRegex = Regex("^(\\*+)\\s+(?:(TODO|IN-PROGRESS)\\s+)?(.*)$")
+        var currentTimestampHeadingTime = ""
 
         while (i < lines.size) {
             val line = lines[i]
@@ -158,12 +158,19 @@ class OrgFileManager(private val orgFile: File) {
                 continue
             }
 
+            if (line.startsWith("**** <")) {
+                val timestampMatch = Regex("<(.+?)>").find(line)
+                currentTimestampHeadingTime = timestampMatch?.groupValues?.get(1) ?: currentTimestampHeadingTime
+            }
+
             val headingMatch = headingRegex.find(line)
             if (headingMatch != null) {
+                val stars = headingMatch.groupValues[1].length
                 val status = headingMatch.groupValues[2].ifBlank { null }
                 val headingText = headingMatch.groupValues[3].trim()
                 val timeMatch = Regex("<(.+?)>").find(line)
-                val time = timeMatch?.groupValues?.get(1) ?: ""
+                val time = timeMatch?.groupValues?.get(1)
+                    ?: if (stars >= 5 && status != null) currentTimestampHeadingTime else ""
 
                 var scheduled: String? = null
                 var deadline: String? = null
@@ -182,6 +189,17 @@ class OrgFileManager(private val orgFile: File) {
                         val deadMatch = Regex("DEADLINE: <(.+?)>").find(bodyLine)
                         scheduled = schedMatch?.groupValues?.get(1) ?: scheduled
                         deadline = deadMatch?.groupValues?.get(1) ?: deadline
+                    } else if (status != null) {
+                        val plainDates = Regex("<(.*?)>").findAll(bodyLine).map { it.groupValues[1] }.toList()
+                        if (plainDates.isNotEmpty()) {
+                            if (plainDates.isNotEmpty()) scheduled = plainDates.getOrNull(0) ?: scheduled
+                            if (plainDates.size >= 2) deadline = plainDates.getOrNull(1) ?: deadline
+                            if (plainDates.size == 1 && deadline == null && scheduled != null) {
+                                // 单日期场景默认视为计划时间
+                            }
+                        } else if (bodyLine.isNotBlank()) {
+                            contentLines.add(bodyLine.trim())
+                        }
                     } else if (bodyLine.isNotBlank()) {
                         contentLines.add(bodyLine.trim())
                     }
