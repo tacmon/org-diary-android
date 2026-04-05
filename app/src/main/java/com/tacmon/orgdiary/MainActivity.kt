@@ -6,10 +6,16 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.lifecycleScope
@@ -22,6 +28,11 @@ import java.util.Calendar
 class MainActivity : ComponentActivity() {
     private lateinit var gitRepo: GitRepository
     private lateinit var orgManager: OrgFileManager
+    private val remoteRepoUrl = "https://gitee.com/tacmon/my-diary"
+
+    private suspend fun syncBeforeEdit(token: String): Result<Unit> {
+        return gitRepo.cloneOrPull(remoteRepoUrl, token)
+    }
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -101,21 +112,26 @@ class MainActivity : ComponentActivity() {
         status: String, onStatusChange: (String) -> Unit
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp),
+            modifier = Modifier.fillMaxSize().padding(padding).padding(16.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             if (showConfig) {
                 OutlinedTextField(
                     value = token,
                     onValueChange = onTokenChange,
-                    label = { Text("GitHub Token") },
+                    label = { Text("Gitee 私人令牌") },
                     modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "同步仓库：$remoteRepoUrl",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Button(
                     onClick = {
                         lifecycleScope.launch {
                             onStatusChange("同步中...")
-                            gitRepo.cloneOrPull("https://github.com/tacmon/my-diary-repo.git", token)
+                            gitRepo.cloneOrPull(remoteRepoUrl, token)
                                 .onSuccess { onStatusChange("同步成功") }
                                 .onFailure { onStatusChange("同步失败: ${it.message}") }
                         }
@@ -198,6 +214,13 @@ class MainActivity : ComponentActivity() {
                 Button(
                     onClick = {
                         lifecycleScope.launch {
+                            onStatusChange("插入前同步中...")
+                            syncBeforeEdit(token)
+                                .onFailure {
+                                    onStatusChange("插入前同步失败: ${it.message}")
+                                    return@launch
+                                }
+
                             onStatusChange("插入中...")
                             val success = if (entryType == "TODO") {
                                 val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
@@ -235,13 +258,13 @@ class MainActivity : ComponentActivity() {
         var entries by remember { mutableStateOf<List<OrgFileManager.DiaryEntry>>(emptyList()) }
         
         LaunchedEffect(Unit) {
-            entries = orgManager.getRecentEntries(50)
+            entries = orgManager.getRecentEntries()
         }
         
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("最近日记", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                TextButton(onClick = { entries = orgManager.getRecentEntries(50) }) {
+                Text("全部日记", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                TextButton(onClick = { entries = orgManager.getRecentEntries() }) {
                     Text("刷新")
                 }
             }
@@ -272,25 +295,100 @@ class MainActivity : ComponentActivity() {
         
         Column(modifier = Modifier.fillMaxSize().padding(padding)) {
             Row(modifier = Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("待办事项", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                Column {
+                    Text("Agenda", fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        "按截止时间从紧张到松弛排序，共 ${todos.size} 项",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
                 TextButton(onClick = { todos = orgManager.getTodoItems() }) {
                     Text("刷新")
                 }
             }
             
             LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+                if (todos.isEmpty()) {
+                    item {
+                        Card(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+                        ) {
+                            Text(
+                                "暂未发现 TODO / IN-PROGRESS 条目，请先同步仓库或添加任务。",
+                                modifier = Modifier.padding(16.dp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
                 items(todos) { todo ->
-                    Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), 
-                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
-                        Column(modifier = Modifier.padding(12.dp)) {
-                            Text(todo.content, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-                            Text(todo.time, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSecondaryContainer, modifier = Modifier.padding(top = 4.dp))
+                    val cardColor = if (todo.deadline != null) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.secondaryContainer
+                    }
+                    val urgencyColor = when {
+                        todo.deadline != null && todo.sortKey < 0 -> MaterialTheme.colorScheme.error
+                        todo.deadline != null && todo.sortKey == 0L -> MaterialTheme.colorScheme.error
+                        todo.deadline != null && todo.sortKey <= 3 -> Color(0xFFB26A00)
+                        else -> MaterialTheme.colorScheme.primary
+                    }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                        colors = CardDefaults.cardColors(containerColor = cardColor)
+                    ) {
+                        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Surface(
+                                    shape = RoundedCornerShape(999.dp),
+                                    color = if (todo.status == "IN-PROGRESS") MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
+                                ) {
+                                    Text(
+                                        todo.status,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                        color = MaterialTheme.colorScheme.onPrimary,
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
+                                Text(
+                                    todo.urgencyText,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = urgencyColor
+                                )
+                            }
+
+                            Text(
+                                todo.content,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Text(
+                                "创建于 ${todo.time}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                             todo.scheduled?.let {
-                                Text("📅 计划: $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary, modifier = Modifier.padding(top = 2.dp))
+                                Text("📅 计划: $it", fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
                             }
                             todo.deadline?.let {
-                                Text("⏰ 截止: $it", fontSize = 11.sp, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 2.dp))
+                                Text("⏰ 截止: $it", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                             }
+                            Text(
+                                "归档日期：${todo.date}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
                         }
                     }
                 }

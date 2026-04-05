@@ -2,6 +2,9 @@ package com.tacmon.orgdiary
 
 import java.io.File
 import java.text.SimpleDateFormat
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.*
 
 class OrgFileManager(private val orgFile: File) {
@@ -22,24 +25,31 @@ class OrgFileManager(private val orgFile: File) {
         // 查找日期标题
         for (i in lines.indices) {
             if (lines[i].startsWith("* <$dateStr>")) {
+                // 找到该日期下的最后一个条目位置
                 insertIndex = i + 1
+                for (j in i + 1 until lines.size) {
+                    if (lines[j].startsWith("* <")) {
+                        // 遇到下一个日期标题，在它之前插入
+                        insertIndex = j
+                        break
+                    }
+                    if (j == lines.size - 1) {
+                        // 已到文件末尾
+                        insertIndex = lines.size
+                    }
+                }
                 break
             }
         }
         
-        // 如果没找到日期，创建新日期标题
+        // 如果没找到日期，创建新日期标题（追加到文件末尾）
         if (insertIndex == -1) {
-            // 找到合适的插入位置（按日期倒序）
-            for (i in lines.indices) {
-                if (lines[i].startsWith("* <")) {
-                    insertIndex = i
-                    break
-                }
+            insertIndex = lines.size
+            if (insertIndex > 0 && lines[insertIndex - 1].isNotBlank()) {
+                lines.add("")
             }
-            if (insertIndex == -1) insertIndex = lines.size
-            
-            lines.add(insertIndex, "* <$dateStr>")
-            insertIndex++
+            lines.add("* <$dateStr>")
+            insertIndex = lines.size
         }
         
         // 插入条目
@@ -60,24 +70,34 @@ class OrgFileManager(private val orgFile: File) {
         val lines = orgFile.readLines().toMutableList()
         var insertIndex = -1
         
+        // 查找日期标题
         for (i in lines.indices) {
             if (lines[i].startsWith("* <$dateStr>")) {
+                // 找到该日期下的最后一个条目位置
                 insertIndex = i + 1
+                for (j in i + 1 until lines.size) {
+                    if (lines[j].startsWith("* <")) {
+                        // 遇到下一个日期标题，在它之前插入
+                        insertIndex = j
+                        break
+                    }
+                    if (j == lines.size - 1) {
+                        // 已到文件末尾
+                        insertIndex = lines.size
+                    }
+                }
                 break
             }
         }
         
+        // 如果没找到日期，创建新日期标题（追加到文件末尾）
         if (insertIndex == -1) {
-            for (i in lines.indices) {
-                if (lines[i].startsWith("* <")) {
-                    insertIndex = i
-                    break
-                }
+            insertIndex = lines.size
+            if (insertIndex > 0 && lines[insertIndex - 1].isNotBlank()) {
+                lines.add("")
             }
-            if (insertIndex == -1) insertIndex = lines.size
-            
-            lines.add(insertIndex, "* <$dateStr>")
-            insertIndex++
+            lines.add("* <$dateStr>")
+            insertIndex = lines.size
         }
         
         lines.add(insertIndex, "**** TODO <$timeStr>")
@@ -100,73 +120,171 @@ class OrgFileManager(private val orgFile: File) {
     }
     
     data class DiaryEntry(val date: String, val time: String, val content: String, val isTodo: Boolean = false)
-    data class TodoItem(val date: String, val time: String, val content: String, val scheduled: String?, val deadline: String?)
-    
-    fun getRecentEntries(limit: Int = 20): List<DiaryEntry> {
+    data class TodoItem(
+        val date: String,
+        val time: String,
+        val content: String,
+        val status: String,
+        val scheduled: String?,
+        val deadline: String?,
+        val sortKey: Long,
+        val urgencyText: String
+    )
+
+    private data class ParsedEntry(
+        val date: String,
+        val time: String,
+        val content: String,
+        val status: String?,
+        val scheduled: String?,
+        val deadline: String?
+    )
+
+    private fun parseEntries(): List<ParsedEntry> {
         if (!orgFile.exists()) return emptyList()
-        
-        val entries = mutableListOf<DiaryEntry>()
+
+        val entries = mutableListOf<ParsedEntry>()
         val lines = orgFile.readLines()
         var currentDate = ""
         var i = 0
-        
-        while (i < lines.size && entries.size < limit) {
+        val headingRegex = Regex("^(\\*+)\\s+(?:(TODO|IN-PROGRESS)\\s+)?(.*)$")
+
+        while (i < lines.size) {
             val line = lines[i]
+
             if (line.startsWith("* <") && line.endsWith(">")) {
                 currentDate = line.substring(3, line.length - 1)
-            } else if (line.startsWith("**** ")) {
-                val isTodo = line.contains("TODO")
+                i++
+                continue
+            }
+
+            val headingMatch = headingRegex.find(line)
+            if (headingMatch != null) {
+                val status = headingMatch.groupValues[2].ifBlank { null }
+                val headingText = headingMatch.groupValues[3].trim()
                 val timeMatch = Regex("<(.+?)>").find(line)
                 val time = timeMatch?.groupValues?.get(1) ?: ""
-                val content = if (i + 1 < lines.size) lines[i + 1].trim() else ""
-                if (content.isNotEmpty()) {
-                    entries.add(DiaryEntry(currentDate, time, content, isTodo))
+
+                var scheduled: String? = null
+                var deadline: String? = null
+                val contentLines = mutableListOf<String>()
+                val titleWithoutTimestamp = headingText
+                    .replace(Regex("<[^>]+>"), "")
+                    .trim()
+                var j = i + 1
+
+                while (j < lines.size) {
+                    val bodyLine = lines[j]
+                    if (bodyLine.startsWith("*")) break
+
+                    if (bodyLine.contains("SCHEDULED:") || bodyLine.contains("DEADLINE:")) {
+                        val schedMatch = Regex("SCHEDULED: <(.+?)>").find(bodyLine)
+                        val deadMatch = Regex("DEADLINE: <(.+?)>").find(bodyLine)
+                        scheduled = schedMatch?.groupValues?.get(1) ?: scheduled
+                        deadline = deadMatch?.groupValues?.get(1) ?: deadline
+                    } else if (bodyLine.isNotBlank()) {
+                        contentLines.add(bodyLine.trim())
+                    }
+                    j++
                 }
+
+                val bodyContent = contentLines.joinToString("\n").trim()
+                val content = when {
+                    titleWithoutTimestamp.isNotBlank() && bodyContent.isNotBlank() -> "$titleWithoutTimestamp\n$bodyContent"
+                    titleWithoutTimestamp.isNotBlank() -> titleWithoutTimestamp
+                    else -> bodyContent
+                }.trim()
+
+                if (content.isNotBlank() || status != null) {
+                    entries.add(ParsedEntry(currentDate, time, content, status, scheduled, deadline))
+                }
+
+                i = j
+                continue
             }
+
             i++
         }
+
         return entries
+    }
+
+    private fun parseOrgDate(date: String?): LocalDate? {
+        if (date.isNullOrBlank()) return null
+        return try {
+            orgDateFormat.parse(date)?.toInstant()?.atZone(ZoneId.systemDefault())?.toLocalDate()
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun buildUrgencyText(deadline: String?, scheduled: String?): Pair<Long, String> {
+        val today = LocalDate.now()
+        val deadlineDate = parseOrgDate(deadline)
+        val scheduledDate = parseOrgDate(scheduled)
+
+        deadlineDate?.let {
+            val diff = ChronoUnit.DAYS.between(today, it)
+            val text = when {
+                diff < 0 -> "已逾期 ${-diff} 天"
+                diff == 0L -> "今天截止"
+                diff == 1L -> "明天截止"
+                else -> "$diff 天后截止"
+            }
+            return diff to text
+        }
+
+        scheduledDate?.let {
+            val diff = ChronoUnit.DAYS.between(today, it)
+            val text = when {
+                diff < 0 -> "计划时间已过 ${-diff} 天"
+                diff == 0L -> "今天计划执行"
+                diff == 1L -> "明天计划执行"
+                else -> "$diff 天后计划执行"
+            }
+            return (10_000L + diff) to text
+        }
+
+        return Long.MAX_VALUE to "无截止时间"
+    }
+    
+    fun getRecentEntries(limit: Int = Int.MAX_VALUE): List<DiaryEntry> {
+        return parseEntries()
+            .map {
+                DiaryEntry(
+                    date = it.date,
+                    time = it.time,
+                    content = it.content,
+                    isTodo = it.status == "TODO" || it.status == "IN-PROGRESS"
+                )
+            }
+            .reversed()
+            .take(limit)
     }
     
     fun getTodoItems(): List<TodoItem> {
-        if (!orgFile.exists()) return emptyList()
-        
-        val todos = mutableListOf<TodoItem>()
-        val lines = orgFile.readLines()
-        var currentDate = ""
-        var i = 0
-        
-        while (i < lines.size) {
-            val line = lines[i]
-            if (line.startsWith("* <") && line.endsWith(">")) {
-                currentDate = line.substring(3, line.length - 1)
-            } else if (line.startsWith("**** TODO")) {
-                val timeMatch = Regex("<(.+?)>").find(line)
-                val time = timeMatch?.groupValues?.get(1) ?: ""
-                
-                var scheduled: String? = null
-                var deadline: String? = null
-                var content = ""
-                
-                if (i + 1 < lines.size) {
-                    val nextLine = lines[i + 1]
-                    if (nextLine.contains("SCHEDULED:") || nextLine.contains("DEADLINE:")) {
-                        val schedMatch = Regex("SCHEDULED: <(.+?)>").find(nextLine)
-                        val deadMatch = Regex("DEADLINE: <(.+?)>").find(nextLine)
-                        scheduled = schedMatch?.groupValues?.get(1)
-                        deadline = deadMatch?.groupValues?.get(1)
-                        if (i + 2 < lines.size) content = lines[i + 2].trim()
-                    } else {
-                        content = nextLine.trim()
-                    }
-                }
-                
-                if (content.isNotEmpty()) {
-                    todos.add(TodoItem(currentDate, time, content, scheduled, deadline))
-                }
+        return parseEntries()
+            .asSequence()
+            .filter { it.status == "TODO" || it.status == "IN-PROGRESS" }
+            .map {
+                val urgency = buildUrgencyText(it.deadline, it.scheduled)
+                TodoItem(
+                    date = it.date,
+                    time = it.time,
+                    content = it.content,
+                    status = it.status ?: "TODO",
+                    scheduled = it.scheduled,
+                    deadline = it.deadline,
+                    sortKey = urgency.first,
+                    urgencyText = urgency.second
+                )
             }
-            i++
-        }
-        return todos
+            .sortedWith(
+                compareBy<TodoItem> { it.sortKey }
+                    .thenBy { parseOrgDate(it.deadline) ?: LocalDate.MAX }
+                    .thenBy { parseOrgDate(it.scheduled) ?: LocalDate.MAX }
+                    .thenByDescending { it.time }
+            )
+            .toList()
     }
 }
