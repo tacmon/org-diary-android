@@ -9,9 +9,13 @@ import java.util.*
 
 class OrgFileManager(private val orgFile: File) {
     
-    private val dateFormat = SimpleDateFormat("yyyy-MM-dd E", Locale.CHINA)
-    private val timeFormat = SimpleDateFormat("yyyy-MM-dd E HH:mm", Locale.CHINA)
-    private val orgDateFormat = SimpleDateFormat("yyyy-MM-dd E", Locale.CHINA)
+    private val dateFormat = SimpleDateFormat("yyyy-MM-dd E", Locale.ENGLISH)
+    private val timeFormat = SimpleDateFormat("yyyy-MM-dd E HH:mm", Locale.ENGLISH)
+    private val orgDateFormat = SimpleDateFormat("yyyy-MM-dd E", Locale.ENGLISH)
+    private val orgDateParsers = listOf(
+        SimpleDateFormat("yyyy-MM-dd E", Locale.ENGLISH),
+        SimpleDateFormat("yyyy-MM-dd E", Locale.CHINA)
+    )
     
     fun addEntry(content: String, timestamp: Date = Date()): Boolean {
         if (!orgFile.exists()) return false
@@ -230,7 +234,11 @@ class OrgFileManager(private val orgFile: File) {
     private fun parseOrgDate(date: String?): LocalDate? {
         if (date.isNullOrBlank()) return null
         return try {
-            orgDateFormat.parse(date)?.toInstant()?.atZone(ZoneId.systemDefault())?.toLocalDate()
+            orgDateParsers.firstNotNullOfOrNull { parser ->
+                runCatching {
+                    parser.parse(date)?.toInstant()?.atZone(ZoneId.systemDefault())?.toLocalDate()
+                }.getOrNull()
+            }
         } catch (e: Exception) {
             null
         }
